@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bookmarksiteapi",
+  "compatibility_date": "2025-08-03",
+  "main": "./src/index.tsx",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "bookmarksiteapi",
+      "database_id": "03070842-ba6f-4e77-9bb1-261361b30fdb"
+    }
+  ]
+}
