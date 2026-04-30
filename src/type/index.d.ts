@@ -2,10 +2,12 @@
  * Cloudflare Workers に渡される環境バインディング。
  * @property DB ブックマーク API が利用する Cloudflare D1 データベース。
  * @property ADMIN_TOKEN 管理系 API の Bearer 認証に使う任意のトークン。
+ * @property CORS_ORIGIN 別オリジンからの fetch 用。例: ビュー用URLとCMS用URLを `,` 区切り。未設定は `*`。
  */
 export type Bindings = {
   DB: MinimalD1Database
   ADMIN_TOKEN?: string
+  CORS_ORIGIN?: string
 }
 
 /**

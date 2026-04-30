@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 import { renderer } from './renderer'
 import type {
   Bindings,
@@ -33,6 +34,26 @@ app.use(renderer)
 
 app.get('/', (c) => {
   return c.render(<h1>Bookmark API</h1>)
+})
+
+// ブラウザが別オリジン（例: GitHub Pages）からこの API を fetch するとき、レスポンスに
+// Access-Control-* を付与しないとブロックされる（CORS）。このミドルウェアは認証より先に
+// 登録し、プリフライト OPTIONS は hono/cors 側で 204 を返すため Bearer 不要。
+app.use('/api/*', async (c, next) => {
+  // Worker の Variables: 許可する Origin。未設定は全許可（'*'）。複数はカンマ区切り。
+  const raw = c.env.CORS_ORIGIN?.trim()
+  const origins = raw
+    ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+    : []
+  // hono/cors: 文字列1つ / 配列（いずれかと Origin が一致すればその値を返す）/ '*' の別指定。
+  const origin: string | string[] =
+    origins.length === 0 ? '*' : origins.length === 1 ? origins[0]! : origins
+  return cors({
+    origin,
+    allowHeaders: ['Content-Type', 'Authorization'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    maxAge: 86400, // プリフライト結果のブラウザキャッシュ秒数（負荷軽減）
+  })(c, next)
 })
 
 app.use('/api/*', async (c, next) => {
