@@ -25,7 +25,7 @@ export const parseJsonBody = async (c: AppContext) => {
  * category_で始まるならカテゴリーのUUID
  * bookmarkで始まるならブックマークのUUID
  */
-export const generateId = (prefix: 'catrgory' | 'bookmark') => `${prefix}_${crypto.randomUUID()}`
+export const generateId = (prefix: 'category' | 'bookmark') => `${prefix}_${crypto.randomUUID()}`
 
 /** nameのバリデーション
  * name系入力の文字列の正規化と入力チェック

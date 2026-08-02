@@ -1,0 +1,2 @@
+# Optional exact-origin allowlist. Production defaults to the shared bookmark origin.
+CORS_ORIGIN=https://bookmark.kokage-studio.com

@@ -3,6 +3,11 @@
   "name": "bookmarksiteapi",
   "compatibility_date": "2025-08-03",
   "main": "./src/index.tsx",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "bookmark.kokage-studio.com/api/v1/*", "zone_name": "kokage-studio.com" },
+    { "pattern": "bookmark.kokage-studio.com/admin/api/v1/*", "zone_name": "kokage-studio.com" }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

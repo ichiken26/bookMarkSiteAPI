@@ -9,13 +9,13 @@ export const success = <T,>(data: T, meta?: JsonObject) => ({ data, ...(meta ? {
 
 /** エラーレスポンスを管理
  * @param c Honoのリクエストコンテキスト
- * @param status HTTPステータスコード（400:不正リクエスト、401:認証エラー、403:認可エラー、404:未検出、409:競合、422:バリデーションエラー、500:サーバー内部エラー）
+ * @param status HTTPステータスコード（400:不正リクエスト、404:未検出、405:メソッド不許可、409:競合、422:バリデーションエラー、500:サーバー内部エラー）
  * @param code エラー識別子
  * @param message エラーメッセージ
  */
 export const errorResponse = (
   c: AppContext,
-  status: 400 | 401 | 403 | 404 | 409 | 422 | 500,
+  status: 400 | 404 | 405 | 409 | 422 | 500,
   code: string,
   message: string,
 ) => c.json({ error: { code, message } }, status)

@@ -4,6 +4,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "type-check": "tsc --noEmit && tsc -p test/tsconfig.json",
     "dev": "vite",
     "build": "vite build",
     "preview": "$npm_execpath run build && vite preview",
@@ -13,15 +14,15 @@
     "db:migrate:remote": "wrangler d1 migrations apply bookmarksiteapi --remote"
   },
   "dependencies": {
-    "hono": "^4.12.15"
+    "hono": "^4.12.33"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.2.3",
-    "@cloudflare/vitest-pool-workers": "^0.15.1",
-    "typescript": "^6.0.3",
-    "vite": "^6.3.5",
+    "@cloudflare/vite-plugin": "^1.50.0",
+    "@cloudflare/vitest-pool-workers": "^0.20.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0",
     "vite-ssr-components": "^0.6.1",
-    "vitest": "^4.1.5",
-    "wrangler": "^4.17.0"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.118.0"
   }
 }

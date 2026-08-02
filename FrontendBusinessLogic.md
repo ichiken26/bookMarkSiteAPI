@@ -1,111 +1,26 @@
-# フロントエンド向けビジネスロジック整理
+# Frontend business logic
 
-## 目的
+## Public site
 
-このドキュメントは、`APIspec.md` と実装済み API の挙動を前提に、フロントエンドで実装すべきビジネスロジックを整理する。
+The public site reads from `/api/v1`. Load `GET /categories` first, then fetch
+`GET /categories/:categoryId/bookmarks` only when the category is expanded.
+Cache each loaded category in memory and abort obsolete requests. The compatibility
+tree endpoint is not used for initial rendering.
 
-## 前提
+## CMS
 
-- 書き込み系 API（`POST` / `PUT` / `PATCH` / `DELETE`）は `Authorization: Bearer <ADMIN_TOKEN>` が必要。
-- 読み取り系 API（`GET`）はトークン不要。
-- 成功レスポンスは `{ data, meta? }`、失敗レスポンスは `{ error: { code, message } }`。
+The CMS is served below `/admin/`, which Cloudflare Zero Trust Access protects.
+It sends every request to `/admin/api/v1` and loads categories immediately on
+mount. No application-level credential is collected or stored by the browser.
 
-## 1. 認証ヘッダー制御
+Mutations retain the existing optimistic interaction rules:
 
-- 書き込みリクエスト時のみ `Authorization` ヘッダーを付与する。
-- ヘッダー形式は必ず `Bearer <token>` とする（`Bearer` の後ろに半角スペース1つ）。
-- トークン未設定状態で書き込み操作 UI を実行した場合は、送信前に警告を出してブロックする。
-- `401`（未認証）と `403`（認可失敗）は再ログイン/トークン再設定導線に分岐する。
+- Disable duplicate submissions while a request is active.
+- Show API validation and conflict messages in the page.
+- After category mutation, refresh the category list.
+- After bookmark mutation, refresh counts and each affected expanded category.
+- Reordering sends the full ordered membership as `items`.
+- Destructive actions require browser confirmation.
 
-## 2. 入力バリデーション（送信前）
-
-### 共通
-
-- `id` は送信しない（API 側生成のため）。
-- JSON ボディはオブジェクトで送る（配列やプリミティブ値を送らない）。
-
-### Category
-
-- `name`
-  - 必須。
-  - 前後空白除去後に空文字ならエラー。
-- `sortOrder`
-  - `POST` では任意。
-  - `PUT` では必須。
-  - 指定する場合は「0以上の整数」。
-
-### Bookmark
-
-- `categoryId`
-  - 必須。
-  - 空文字禁止。
-- `name`
-  - 必須。
-  - 前後空白除去後に空文字ならエラー。
-- `url`
-  - 必須。
-  - 前後空白除去後に URL として妥当であること。
-  - `http://` または `https://` のみ許可。
-- `sortOrder`
-  - `POST` では任意。
-  - `PUT` では必須。
-  - 指定する場合は「0以上の整数」。
-
-## 3. エラーコードごとの UI 振る舞い
-
-- `BAD_REQUEST`（400）
-  - リクエスト形式不正。通常は実装不備として扱い、汎用エラー表示 + ログ送信。
-- `UNAUTHORIZED`（401）
-  - トークン未設定/形式不正。トークン入力 UI を再表示。
-- `FORBIDDEN`（403）
-  - トークン不一致。トークン再入力を促す。
-- `NOT_FOUND`（404）
-  - 対象が削除済みの可能性。一覧再取得して画面同期する。
-- `CONFLICT`（409）
-  - 並び替え重複や削除条件不一致。最新データ再取得して再試行導線を出す。
-- `VALIDATION_ERROR`（422）
-  - 項目単位の入力エラーとして表示。可能なら該当フィールドに紐づける。
-- `INTERNAL_SERVER_ERROR` / `CONFIGURATION_ERROR`（500）
-  - ユーザー向けには汎用メッセージ、開発向けには詳細ログを残す。
-
-## 4. 一覧・検索のクエリ制御
-
-- `GET /api/bookmarks`
-  - `limit` は 1 以上の整数。
-  - `offset` は 0 以上の整数。
-  - 無効値入力時は送信前に矯正する（例: 空ならデフォルト、負数は 0 に補正）。
-- フィルタ条件（`categoryId`, `q`）変更時は `offset` を 0 に戻して再検索する。
-- `meta.total` を使ってページャー表示を制御する。
-
-## 5. 並び替え（reorder）運用ルール
-
-- カテゴリ並び替え:
-  - `PATCH /api/categories/reorder`
-  - `items: [{ id, sortOrder }]` を全件または少なくとも表示順対象分まとめて送る。
-- ブックマーク並び替え:
-  - `PATCH /api/categories/:categoryId/bookmarks/reorder`
-  - 対象カテゴリ内の `id` のみ送る。
-- フロント側で必ず検証:
-  - `items` は空配列不可。
-  - `id` 重複不可。
-  - `sortOrder` は 0 以上の整数。
-
-## 6. 楽観更新と再同期
-
-- 並び替えや編集は楽観更新して体感速度を上げる。
-- ただし以下で必ず再同期する:
-  - `409` / `404` 受信時
-  - 連続操作後の最終確定時
-- 再同期 API 優先順位:
-  - 画面全体再描画が必要なら `GET /api/bookmark-tree`
-  - 一部のみなら対象の一覧 API を呼ぶ。
-
-## 7. 画面実装の最小チェックリスト
-
-- [ ] 書き込み系のみ Bearer ヘッダーを付与している。
-- [ ] `id` を create/update body に含めていない。
-- [ ] `name` / `url` / `sortOrder` の事前バリデーションを実装済み。
-- [ ] `401/403/404/409/422/500` それぞれで UI 挙動が分かれている。
-- [ ] 並び替え payload の重複 `id` チェックがある。
-- [ ] API エラー時に `error.code` と `error.message` をログ記録している。
-
+The public API must never be used for mutations. A non-read method there returns
+`405`; this is intentional and must not be retried against another origin.

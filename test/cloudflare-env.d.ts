@@ -1,6 +1,8 @@
-declare namespace Cloudflare {
-  interface Env {
-    TEST_MIGRATIONS: { name: string; queries: string[] }[]
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      TEST_MIGRATIONS: { name: string; queries: string[] }[]
+    }
   }
 }
 

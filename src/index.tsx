@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import type { Context, Next } from 'hono'
 import { cors } from 'hono/cors'
 import { renderer } from './renderer'
 import type {
@@ -29,6 +30,8 @@ import {
 type JsonObject = Record<string, unknown>
 
 const app = new Hono<{ Bindings: Bindings }>()
+const api = new Hono<{ Bindings: Bindings }>()
+const PRODUCTION_ORIGIN = 'https://bookmark.kokage-studio.com'
 
 app.use(renderer)
 
@@ -36,57 +39,60 @@ app.get('/', (c) => {
   return c.render(<h1>Bookmark API</h1>)
 })
 
-// ブラウザが別オリジン（例: GitHub Pages）からこの API を fetch するとき、レスポンスに
-// Access-Control-* を付与しないとブロックされる（CORS）。このミドルウェアは認証より先に
-// 登録し、プリフライト OPTIONS は hono/cors 側で 204 を返すため Bearer 不要。
-app.use('/api/*', async (c, next) => {
-  // Worker の Variables: 許可する Origin。未設定は全許可（'*'）。複数はカンマ区切り。
+const applyApiCors = async (
+  c: Context<{ Bindings: Bindings }>,
+  next: Next,
+) => {
+  // Worker の Variables: 許可する Origin。未設定は本番の同一オリジンのみ。複数はカンマ区切り。
   const raw = c.env.CORS_ORIGIN?.trim()
   const origins = raw
-    ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+    ? raw.split(',').map((value) => value.trim()).filter(Boolean)
     : []
-  // hono/cors: 文字列1つ / 配列（いずれかと Origin が一致すればその値を返す）/ '*' の別指定。
   const origin: string | string[] =
-    origins.length === 0 ? '*' : origins.length === 1 ? origins[0]! : origins
+    origins.length === 0
+      ? PRODUCTION_ORIGIN
+      : origins.length === 1
+        ? origins[0]!
+        : origins
+  const allowMethods = c.req.path.startsWith('/admin/')
+    ? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+    : ['GET', 'HEAD', 'OPTIONS']
+
   return cors({
     origin,
-    allowHeaders: ['Content-Type', 'Authorization'],
-    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    maxAge: 86400, // プリフライト結果のブラウザキャッシュ秒数（負荷軽減）
+    allowHeaders: ['Content-Type'],
+    allowMethods,
+    maxAge: 86400,
   })(c, next)
-})
+}
 
-app.use('/api/*', async (c, next) => {
-  // GETの非同期処理化
-  if (c.req.method === 'GET') {
-    await next() // 次のミドルウェア処理 / ルート処理に処理を勧める関数
-    return
+app.use('/api/v1/*', applyApiCors)
+app.use('/admin/api/v1/*', applyApiCors)
+
+const applySecurityHeaders = async (
+  c: Context<{ Bindings: Bindings }>,
+  next: Next,
+) => {
+  await next()
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('Referrer-Policy', 'no-referrer')
+  c.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")
+}
+
+app.use('/api/v1/*', applySecurityHeaders)
+app.use('/admin/api/v1/*', applySecurityHeaders)
+
+// 公開 API は読み取り専用。管理 API は Cloudflare Zero Trust で保護された
+// /admin/api/v1/* からのみ書き込みを受け付ける。
+app.use('/api/v1/*', async (c, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+    c.header('Allow', 'GET, HEAD, OPTIONS')
+    return errorResponse(c, 405, 'METHOD_NOT_ALLOWED', 'public API is read-only')
   }
-
-  // APIトークンを取得
-  const expectedToken = c.env.ADMIN_TOKEN
-  if (!expectedToken) {
-    return errorResponse(c, 500, 'CONFIGURATION_ERROR', 'ADMIN_TOKEN is not configured')
-  }
-
-  // 認証情報を取得
-  const authorization = c.req.header('Authorization')
-  // Bearerで始まらないヘッダーは認証不正なので早期リターンで排除
-  if (!authorization?.startsWith('Bearer ')) {
-    return errorResponse(c, 401, 'UNAUTHORIZED', 'Bearer token is required')
-  }
-
-  // レスポンスヘッダからBearerの接頭辞を取り除いてトークン本体だけを取り出す
-  const token = authorization.slice('Bearer '.length)
-  // トークン比較し、トークン不正を検知
-  if (token !== expectedToken) {
-    return errorResponse(c, 403, 'FORBIDDEN', 'Invalid bearer token')
-  }
-
   await next()
 })
 
-app.get('/api/categories', async (c) => {
+api.get('/categories', async (c) => {
   // DBからカテゴリー一覧をブックマーク件数つきで取得
   const result = await c.env.DB.prepare(
     // FROM categories c: カテゴリーテーブルをcという名前で記述し参照する
@@ -118,7 +124,7 @@ app.get('/api/categories', async (c) => {
   return c.json(success(data, { total: data.length }))
 })
 
-app.post('/api/categories', async (c) => {
+api.post('/categories', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
 
@@ -142,7 +148,7 @@ app.post('/api/categories', async (c) => {
 
   /** カテゴリー作成時にUUIDを付与し、 カテゴリー名と並び順を付与*/
   const category: Category = {
-    id: generateId('catrgory'),
+    id: generateId('category'),
     name: name.value,
     sortOrder: sortOrder.value ?? (await nextCategorySortOrder(c.env.DB)), // 並び順がリクエストで渡されていたらそれを使用, それがnullish(null || undefined)のときDBから次の並び順のみ取得
   }
@@ -156,7 +162,7 @@ app.post('/api/categories', async (c) => {
   return c.json(success(category), 201)
 })
 
-app.patch('/api/categories/reorder', async (c) => {
+api.patch('/categories/reorder', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
 
@@ -225,7 +231,7 @@ app.patch('/api/categories/reorder', async (c) => {
   return c.json(success(data, { total: data.length }))
 })
 
-app.get('/api/categories/:categoryId', async (c) => { // 『:』は動的セグメント、Nuxtの/api/categories/{categoryid}
+api.get('/categories/:categoryId', async (c) => { // 『:』は動的セグメント、Nuxtの/api/v1/categories/{categoryid}
   // DBからカテゴリーIDに相当するデータ(カテゴリーID・カテゴリー名・並び順)を1件取得
   const category = await getCategory(c.env.DB, c.req.param('categoryId'))
   // 見つからなかったとき404エラー
@@ -233,7 +239,7 @@ app.get('/api/categories/:categoryId', async (c) => { // 『:』は動的セグ�
   return c.json(success(toCategory(category)))
 })
 
-app.put('/api/categories/:categoryId', async (c) => {
+api.put('/categories/:categoryId', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
   // エラーがあるもしくはリクエストボディが存在しないときに400エラーを返す
@@ -265,7 +271,7 @@ app.put('/api/categories/:categoryId', async (c) => {
   return c.json(success({ id: categoryId, name: name.value, sortOrder: sortOrder.value }))
 })
 
-app.patch('/api/categories/:categoryId', async (c) => {
+api.patch('/categories/:categoryId', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
   // エラーがあるもしくはリクエストボディが存在しないときに400エラーを返す
@@ -312,7 +318,7 @@ app.patch('/api/categories/:categoryId', async (c) => {
   return c.json(success(category))
 })
 
-app.delete('/api/categories/:categoryId', async (c) => {
+api.delete('/categories/:categoryId', async (c) => {
   // パスパラメータのカテゴリーIDを取得
   const categoryId = c.req.param('categoryId')
   // パスパラメータのカテゴリーIDに一致するカテゴリーデータをDBから1件取得
@@ -334,7 +340,7 @@ app.delete('/api/categories/:categoryId', async (c) => {
   return c.body(null, 204)
 })
 
-app.get('/api/bookmarks', async (c) => {
+api.get('/bookmarks', async (c) => {
   const categoryId = c.req.query('categoryId')
   const q = c.req.query('q')?.trim() // 検索クエリ(検索ワード)
   const limitRaw = c.req.query('limit') // 一覧表示の上限件数(何件まで表示)
@@ -387,7 +393,7 @@ app.get('/api/bookmarks', async (c) => {
   return c.json(success((result.results ?? []).map(toBookmark), { total: count?.total ?? 0, limit, offset }))
 })
 
-app.post('/api/bookmarks', async (c) => {
+api.post('/bookmarks', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
   // エラーがあるもしくはリクエストボディが存在しないときに400エラーを返す
@@ -441,7 +447,7 @@ app.post('/api/bookmarks', async (c) => {
   return c.json(success(bookmark), 201)
 })
 
-app.get('/api/bookmarks/:bookmarkId', async (c) => {
+api.get('/bookmarks/:bookmarkId', async (c) => {
   // パスパラメータのbookmarkIdに一致するブックマークをDBから1件取得
   const bookmark = await getBookmark(c.env.DB, c.req.param('bookmarkId'))
   // 対象が存在しないなら404エラー
@@ -450,7 +456,7 @@ app.get('/api/bookmarks/:bookmarkId', async (c) => {
   return c.json(success(toBookmark(bookmark)))
 })
 
-app.put('/api/bookmarks/:bookmarkId', async (c) => {
+api.put('/bookmarks/:bookmarkId', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
   // エラーがあるもしくはリクエストボディが存在しないときに400エラーを返す
@@ -509,7 +515,7 @@ app.put('/api/bookmarks/:bookmarkId', async (c) => {
   return c.json(success(bookmark))
 })
 
-app.patch('/api/bookmarks/:bookmarkId', async (c) => {
+api.patch('/bookmarks/:bookmarkId', async (c) => {
   // HonoのコンテキストオブジェクトのJSONをパースし、bodyとerrorに分離
   const { body, error } = await parseJsonBody(c)
   // エラーがあるもしくはリクエストボディが存在しないときに400エラーを返す
@@ -582,7 +588,7 @@ app.patch('/api/bookmarks/:bookmarkId', async (c) => {
   return c.json(success(bookmark))
 })
 
-app.delete('/api/bookmarks/:bookmarkId', async (c) => {
+api.delete('/bookmarks/:bookmarkId', async (c) => {
   // パスパラメータのbookmarkIdを取得
   const bookmarkId = c.req.param('bookmarkId')
   // パスパラメータのbookmarkIdに一致するブックマークをDBから1件取得
@@ -596,7 +602,7 @@ app.delete('/api/bookmarks/:bookmarkId', async (c) => {
   return c.body(null, 204)
 })
 
-app.get('/api/categories/:categoryId/bookmarks', async (c) => {
+api.get('/categories/:categoryId/bookmarks', async (c) => {
   // パスパラメータのcategoryIdを取得
   const categoryId = c.req.param('categoryId')
   // categoryIdに対応するカテゴリがDBに存在しないなら404エラー
@@ -621,7 +627,7 @@ app.get('/api/categories/:categoryId/bookmarks', async (c) => {
   return c.json(success(data, { total: data.length }))
 })
 
-app.patch('/api/categories/:categoryId/bookmarks/reorder', async (c) => {
+api.patch('/categories/:categoryId/bookmarks/reorder', async (c) => {
   // パスパラメータのcategoryIdを取得
   const categoryId = c.req.param('categoryId')
   // categoryIdに対応するカテゴリがDBに存在しないなら404エラー
@@ -709,7 +715,7 @@ app.patch('/api/categories/:categoryId/bookmarks/reorder', async (c) => {
   return c.json(success(data, { total: data.length }))
 })
 
-app.get('/api/bookmark-tree', async (c) => {
+api.get('/bookmark-tree', async (c) => {
   // カテゴリーデータを並び順とカテゴリー名の昇順で取得
   const categoriesResult = await c.env.DB.prepare(
     'SELECT id, name, sort_order FROM categories ORDER BY sort_order ASC, name ASC',
@@ -752,6 +758,9 @@ app.get('/api/bookmark-tree', async (c) => {
   // カテゴリ＋配下ブックマークのツリー(data)と、カテゴリ件数・ブックマーク総数(meta)を返す
   return c.json(success(data, { categoryTotal: data.length, bookmarkTotal }))
 })
+
+app.route('/api/v1', api)
+app.route('/admin/api/v1', api)
 
 // どのルートにも一致しなかったリクエストに共通の404レスポンスを返す
 app.notFound((c) => errorResponse(c, 404, 'NOT_FOUND', 'not found'))
